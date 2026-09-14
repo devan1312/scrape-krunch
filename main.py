@@ -1,3 +1,8 @@
+import argparse
+import json
+from datetime import datetime
+from pathlib import Path
+
 import requests
 from bs4 import BeautifulSoup
 from ollama import chat, ChatResponse
@@ -8,6 +13,38 @@ from article_cache import ArticleCache
 #CACHE_LIMIT = 5
 #max size set to low number for testing needs below, else, default is set at 50
 article_cache = ArticleCache("""max_size = CACHE_LIMIT""")
+
+
+def export_articles(articles, output_format, output_dir="exports"):
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_path = output_path / f"articles_{timestamp}.{output_format}"
+
+    if output_format == "json":
+        file_path.write_text(json.dumps(articles, indent=2, ensure_ascii=False), encoding="utf-8")
+    else:
+        markdown = ["# Article Export", ""]
+        for article in articles:
+            markdown.extend([
+                f"## {article['title']}",
+                "",
+                f"Source URL: {article['source_url']}",
+                "",
+                "### Raw text",
+                "",
+                article["raw_text"],
+                "",
+                "### LLM summary",
+                "",
+                article["summary"],
+                "",
+            ])
+        file_path.write_text("\n".join(markdown), encoding="utf-8")
+
+    print(f"Exported {len(articles)} article(s) to {file_path}")
+    return file_path
 
 
 def search_duckduckgo(query, max_results=10):
@@ -305,8 +342,9 @@ def get_entertainment_articles(count=3):
     return articles
 
 
-def get_stuff():
+def get_stuff(output_format=None):
     processed_articles = set()
+    exported_articles = []
 
     html = requests.get("https://idrw.org/")
     soup = BeautifulSoup(html.text, "html.parser")
@@ -545,11 +583,29 @@ def get_stuff():
             print("\n--- LLM Response ---\n")
             print(response.message.content)
             print("\n--------------------\n")
+
+            exported_articles.append({
+                "title": heading_text,
+                "source_url": "https://idrw.org/",
+                "raw_text": article_text,
+                "summary": response.message.content,
+            })
         except Exception as e:
             print(f"dunno what happened: {e}")
 
+    if output_format:
+        export_articles(exported_articles, output_format)
+
 
 def main():
+    parser = argparse.ArgumentParser(description="Scrape and summarize news articles.")
+    parser.add_argument(
+        "--output-format",
+        choices=("json", "markdown"),
+        help="Write scraped articles and summaries to an exports/ file.",
+    )
+    args = parser.parse_args()
+
     print("Select content type to scrape and summarize:")
     print("1. Business  ")
     print("2. Technology [wip]")
@@ -577,7 +633,7 @@ def main():
         articles = get_health_articles()
         extract_func = extract_health_content
     elif choice == "5":
-        get_stuff()
+        get_stuff(args.output_format)
         return
     elif choice == "6":
         get_reddit_posts_query = input("Enter the topic you want to search on Reddit: ")
@@ -599,6 +655,8 @@ def main():
         articles = articles[:count]
         print(f" {count} reddit posts:")
 
+        exported_articles = []
+
         for i in range(count):
             print(f"\n🔹 [{i + 1}] {articles[i]['title']}")
             print(f"🔗 {articles[i]['link']}")
@@ -616,7 +674,17 @@ def main():
             analysis = analyze_reddit_discussion(articles[i]["title"], combined_content)
             print(f"\n  Analysis:\n{analysis}\n")
 
+            exported_articles.append({
+                "title": articles[i]["title"],
+                "source_url": articles[i]["link"],
+                "raw_text": combined_content,
+                "summary": analysis,
+            })
+
             print("------------------------------\n")
+
+        if args.output_format:
+            export_articles(exported_articles, args.output_format)
 
         return
 
@@ -629,6 +697,7 @@ def main():
         print("No articles found.")
         return
 
+    exported_articles = []
     for i, article in enumerate(articles, 1):
         print(f"\n🔹 [{i}] {article['title']}")
         print(f"🔗 {article['link']}")
@@ -640,8 +709,18 @@ def main():
         analysis = analyze_with_llm(article["title"], content)
         print(f" analysis:\n{analysis}\n")
 
+        exported_articles.append({
+            "title": article["title"],
+            "source_url": article["link"],
+            "raw_text": content,
+            "summary": analysis,
+        })
+
         print("------------------------------\n")
         time.sleep(1)
+
+    if args.output_format:
+        export_articles(exported_articles, args.output_format)
 
 
 if __name__ == "__main__":

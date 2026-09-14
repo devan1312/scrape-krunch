@@ -63,6 +63,14 @@ pip install requests beautifulsoup4
 
 4. Follow the prompt to choose a category (1–6) and get LLM-based analysis.
 
+To save scraped article data and LLM summaries, pass an output format. Files are
+written to `exports/`, which is created automatically when needed:
+
+```bash
+python main.py --output-format json
+python main.py --output-format markdown
+```
+
 ## Future Scope
 1. Cloud Deployment
 2. Cache Previous articles
