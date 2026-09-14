@@ -1,18 +1,81 @@
 import argparse
 import json
+import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
 
 import requests
 from bs4 import BeautifulSoup
 from ollama import chat, ChatResponse
-import time
 from duckduckgo_search import DDGS as ddgs
 from article_cache import ArticleCache
 
 #CACHE_LIMIT = 5
 #max size set to low number for testing needs below, else, default is set at 50
 article_cache = ArticleCache("""max_size = CACHE_LIMIT""")
+
+SCRAPER_USER_AGENT = "scrape-krunch/1.0"
+
+
+class RobotsPolicy:
+    def __init__(self):
+        self.parsers = {}
+        self.last_requests = {}
+
+    def _get_parser(self, url):
+        parsed_url = urlparse(url)
+        host = parsed_url.netloc.lower()
+        if not parsed_url.scheme or not host:
+            return None, host
+
+        if host in self.parsers:
+            return self.parsers[host], host
+
+        robots_url = f"{parsed_url.scheme}://{parsed_url.netloc}/robots.txt"
+        parser = RobotFileParser(robots_url)
+        try:
+            parser.read()
+        except Exception as error:
+            print(f"[robots] Could not read {robots_url}; skipping {url}: {error}")
+            self.parsers[host] = None
+            return None, host
+
+        self.parsers[host] = parser
+        self.last_requests[host] = time.monotonic()
+        return parser, host
+
+    def is_allowed(self, url, user_agent):
+        parser, host = self._get_parser(url)
+        if parser is None or not parser.can_fetch(user_agent, url):
+            print(f"[robots] Disallowed by robots.txt; skipping URL: {url}")
+            return False
+
+        delay = parser.crawl_delay(user_agent) or parser.crawl_delay("*")
+        if delay:
+            elapsed = time.monotonic() - self.last_requests.get(host, 0)
+            remaining = delay - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+        return True
+
+    def record_request(self, url):
+        self.last_requests[urlparse(url).netloc.lower()] = time.monotonic()
+
+
+robots_policy = RobotsPolicy()
+
+
+def safe_get(url, headers=None, timeout=10):
+    request_headers = dict(headers or {})
+    user_agent = request_headers.setdefault("User-Agent", SCRAPER_USER_AGENT)
+    if not robots_policy.is_allowed(url, user_agent):
+        return None
+
+    response = requests.get(url, headers=request_headers, timeout=timeout)
+    robots_policy.record_request(url)
+    return response
 
 
 def export_articles(articles, output_format, output_dir="exports"):
@@ -79,7 +142,7 @@ def get_article_links(count=3):
                         break
 
         if not articles:
-            for result in results:
+            exported_articles = []
                 if result.get('title') and result.get('href'):
                     if article_cache.is_article_processed(result['href'], result['title']):
                         print(f"Skipping previously processed article: {result['title']}")
@@ -111,7 +174,9 @@ def get_bbc_business_articles(count=3):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = safe_get(url, headers=headers, timeout=10)
+        if response is None:
+            return []
         soup = BeautifulSoup(response.text, "html.parser")
 
         articles = []
@@ -124,6 +189,13 @@ def get_bbc_business_articles(count=3):
                 title = title_elem.get_text(strip=True)
 
                 if title and len(title) > 10:
+
+                    exported_articles.append({
+                        "title": heading_text,
+                        "source_url": "https://idrw.org/",
+                        "raw_text": article_text,
+                        "summary": response.message.content,
+                    })
                     full_url = href if href.startswith("http") else f"https://www.bbc.com{href}"
                     
                     if article_cache.is_article_processed(full_url, title):
@@ -147,7 +219,9 @@ def extract_article_content(url):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = safe_get(url, headers=headers, timeout=10)
+        if response is None:
+            return "Skipped by robots.txt."
         soup = BeautifulSoup(response.text, "html.parser")
 
         if "reuters.com" in url:
@@ -182,7 +256,9 @@ def extract_article_content(url):
 def get_tech_articles(count=3):
     url = "https://techcrunch.com/latest/"
     headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
+    response = safe_get(url, headers=headers)
+    if response is None:
+        return []
     soup = BeautifulSoup(response.text, "html.parser")
 
     articles = []
@@ -206,7 +282,9 @@ def get_tech_articles(count=3):
 def extract_tech_content(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = safe_get(url, headers=headers, timeout=10)
+        if response is None:
+            return "Skipped by robots.txt."
         soup = BeautifulSoup(response.text, "html.parser")
 
         article_div = soup.find("div", class_="article-content")
@@ -227,7 +305,9 @@ def extract_tech_content(url):
 def get_sports_articles(count=3):
     url = "https://www.espn.com/sports/"
     headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
+    response = safe_get(url, headers=headers)
+    if response is None:
+        return []
     soup = BeautifulSoup(response.text, "html.parser")
 
     articles = []
@@ -254,7 +334,9 @@ def get_sports_articles(count=3):
 def extract_sports_content(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = safe_get(url, headers=headers, timeout=10)
+        if response is None:
+            return "Skipped by robots.txt."
         soup = BeautifulSoup(response.text, "html.parser")
 
         article_div = soup.find("div", class_="story-body") or soup.find("div", class_="article-body")
@@ -273,7 +355,9 @@ def extract_sports_content(url):
 def get_health_articles(count=3):
     url = "https://www.healthline.com/health-news"
     headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
+    response = safe_get(url, headers=headers)
+    if response is None:
+        return []
     soup = BeautifulSoup(response.text, "html.parser")
 
     articles = []
@@ -300,7 +384,9 @@ def get_health_articles(count=3):
 def extract_health_content(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = safe_get(url, headers=headers, timeout=10)
+        if response is None:
+            return "Skipped by robots.txt."
         soup = BeautifulSoup(response.text, "html.parser")
 
         article_div = soup.find("div", class_="article-body") or soup.find("div", class_="content")
@@ -319,7 +405,9 @@ def extract_health_content(url):
 def get_entertainment_articles(count=3):
     url = "https://variety.com/latest/"
     headers = {"User-Agent": "Mozilla/5.0"}
-    response = requests.get(url, headers=headers)
+    response = safe_get(url, headers=headers)
+    if response is None:
+        return []
     soup = BeautifulSoup(response.text, "html.parser")
 
     articles = []
@@ -346,7 +434,9 @@ def get_stuff(output_format=None):
     processed_articles = set()
     exported_articles = []
 
-    html = requests.get("https://idrw.org/")
+    html = safe_get("https://idrw.org/")
+    if html is None:
+        return
     soup = BeautifulSoup(html.text, "html.parser")
     articles = soup.find_all("article")
 
@@ -386,7 +476,9 @@ def get_reddit_posts(query, count=7):
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
-        response = requests.get(search_url, headers=headers)
+        response = safe_get(search_url, headers=headers)
+        if response is None:
+            return []
         data = response.json()
 
         posts = []
@@ -422,7 +514,9 @@ def get_reddit_comments(post_url, max_comments=50):
 
     try:
         json_url = post_url.rstrip('/') + '.json'
-        response = requests.get(json_url, headers=headers)
+        response = safe_get(json_url, headers=headers)
+        if response is None:
+            return "No comments available"
         data = response.json()
 
         comments = []
@@ -537,10 +631,13 @@ Be concise but thorough, focusing on the most interesting and relevant aspects o
         return f"Analysis Error: {e}"
 
 
-def get_stuff():
+def get_stuff(output_format=None):
     processed_articles = set()
+    exported_articles = []
 
-    html = requests.get("https://idrw.org/")
+    html = safe_get("https://idrw.org/")
+    if html is None:
+        return
     soup = BeautifulSoup(html.text, "html.parser")
     articles = soup.find_all("article")
 

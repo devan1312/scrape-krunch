@@ -22,6 +22,7 @@ This project scrapes the latest news articles from various domains like **Busine
 - ⚙️ Clean command-line interface for selecting the type of news  
 - ⏱️ Supports rate limiting with `time.sleep()`  
 - 🔗 Extracts full article content when possible  
+- 🤖 Checks `robots.txt` before scraping and honors `Crawl-delay` directives
 
 ## 🧠 LLM Prompt
 
