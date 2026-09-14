@@ -1,3 +1,4 @@
+import argparse
 import requests
 from bs4 import BeautifulSoup
 from ollama import chat, ChatResponse
@@ -5,9 +6,7 @@ import time
 from duckduckgo_search import DDGS as ddgs
 from article_cache import ArticleCache
 
-#CACHE_LIMIT = 5
-#max size set to low number for testing needs below, else, default is set at 50
-article_cache = ArticleCache("""max_size = CACHE_LIMIT""")
+article_cache = ArticleCache()
 
 
 def search_duckduckgo(query, max_results=10):
@@ -644,5 +643,19 @@ def main():
         time.sleep(1)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Scrape and summarize news articles.")
+    parser.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help="Flush the stored article cache file and exit."
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    if args.clear_cache:
+        article_cache.clear_cache()
+    else:
+        main()
