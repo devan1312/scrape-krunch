@@ -8,6 +8,44 @@ from article_cache import ArticleCache
 
 article_cache = ArticleCache()
 
+FALLBACK_CONTAINER_SELECTORS = [
+    ("article", {}),
+    ("div", {"class": "article-content"}),
+    ("div", {"class": "article-body"}),
+    ("div", {"class": "story-body"}),
+    ("div", {"class": "entry-content"}),
+    ("div", {"class": "post-content"}),
+    ("div", {"class": "content-body"}),
+    ("div", {"class": "content"}),
+    ("main", {}),
+]
+
+MIN_MEANINGFUL_CONTENT_LENGTH = 200
+
+
+def _text_from_container(container, paragraph_limit=None):
+    paragraphs = container.find_all("p")
+    if paragraph_limit:
+        paragraphs = paragraphs[:paragraph_limit]
+    return "\n".join(p.get_text(strip=True) for p in paragraphs).strip()
+
+
+def extract_with_fallback(soup, site_selectors=None, url=""):
+    candidates = list(site_selectors or []) + FALLBACK_CONTAINER_SELECTORS
+
+    for tag, attrs in candidates:
+        container = soup.find(tag, attrs) if attrs else soup.find(tag)
+        if not container:
+            continue
+        content = _text_from_container(container)
+        if len(content) >= MIN_MEANINGFUL_CONTENT_LENGTH:
+            return content
+
+    print(f"Warning: no known article container matched for '{url}'. "
+          f"Falling back to generic <p> tag extraction.")
+    content = _text_from_container(soup, paragraph_limit=10)
+    return content if content else "Could not extract content."
+
 
 def search_duckduckgo(query, max_results=10):
     with ddgs() as ddgs_instance:
@@ -20,7 +58,7 @@ def get_article_links(count=3):
         query = "latest business news 2025"
         print(f"biz articles getting..")
 
-        results = search_duckduckgo(query, max_results=count * 3)  # Get more results to account for cached ones
+        results = search_duckduckgo(query, max_results=count * 3)
         articles = []
 
         for result in results:
@@ -112,30 +150,19 @@ def extract_article_content(url):
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
 
+        site_selectors = []
         if "reuters.com" in url:
-            article_div = soup.find("div", {"data-testid": "ArticleBody"}) or soup.find("div",
-                                                                                        class_="StandardArticleBody_body")
-            if article_div:
-                paragraphs = article_div.find_all("p")
-                content = "\n".join(p.get_text(strip=True) for p in paragraphs)
-                return content.strip() if content else "Empty article body."
-
+            site_selectors = [
+                ("div", {"data-testid": "ArticleBody"}),
+                ("div", {"class": "StandardArticleBody_body"}),
+            ]
         elif "bbc.com" in url:
-            article_div = soup.find("div", {"data-component": "text-block"}) or soup.find("div", class_="story-body")
-            if not article_div:
-                article_div = soup.find("article") or soup.find("main")
+            site_selectors = [
+                ("div", {"data-component": "text-block"}),
+                ("div", {"class": "story-body"}),
+            ]
 
-            if article_div:
-                paragraphs = article_div.find_all("p")
-                content = "\n".join(p.get_text(strip=True) for p in paragraphs)
-                return content.strip() if content else "Empty article body."
-
-        paragraphs = soup.find_all("p")
-        if paragraphs:
-            content = "\n".join(p.get_text(strip=True) for p in paragraphs[:10])  # First 10 paragraphs
-            return content.strip() if content else "Could not extract content."
-
-        return "Article content div not found."
+        return extract_with_fallback(soup, site_selectors=site_selectors, url=url)
 
     except Exception as e:
         return f"Error extracting content: {e}"
@@ -171,16 +198,11 @@ def extract_tech_content(url):
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        article_div = soup.find("div", class_="article-content")
-        if not article_div:
-            article_div = soup.find("div", class_="entry-content")
-
-        if article_div:
-            paragraphs = article_div.find_all("p")
-            content = "\n".join(p.get_text(strip=True) for p in paragraphs)
-            return content.strip() if content else "Empty content."
-        else:
-            return "Content div not found."
+        site_selectors = [
+            ("div", {"class": "article-content"}),
+            ("div", {"class": "entry-content"}),
+        ]
+        return extract_with_fallback(soup, site_selectors=site_selectors, url=url)
 
     except Exception as e:
         return f"Error: {e}"
@@ -219,14 +241,11 @@ def extract_sports_content(url):
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        article_div = soup.find("div", class_="story-body") or soup.find("div", class_="article-body")
-
-        if article_div:
-            paragraphs = article_div.find_all("p")
-            content = "\n".join(p.get_text(strip=True) for p in paragraphs)
-            return content.strip() if content else "Empty content."
-        else:
-            return "Content div not found."
+        site_selectors = [
+            ("div", {"class": "story-body"}),
+            ("div", {"class": "article-body"}),
+        ]
+        return extract_with_fallback(soup, site_selectors=site_selectors, url=url)
 
     except Exception as e:
         return f"Error: {e}"
@@ -265,14 +284,11 @@ def extract_health_content(url):
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        article_div = soup.find("div", class_="article-body") or soup.find("div", class_="content")
-
-        if article_div:
-            paragraphs = article_div.find_all("p")
-            content = "\n".join(p.get_text(strip=True) for p in paragraphs)
-            return content.strip() if content else "Empty content."
-        else:
-            return "Content div not found."
+        site_selectors = [
+            ("div", {"class": "article-body"}),
+            ("div", {"class": "content"}),
+        ]
+        return extract_with_fallback(soup, site_selectors=site_selectors, url=url)
 
     except Exception as e:
         return f"Error: {e}"
